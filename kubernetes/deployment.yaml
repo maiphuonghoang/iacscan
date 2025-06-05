@@ -1,0 +1,168 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vulnerable-app
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vulnerable-app
+  template:
+    metadata:
+      labels:
+        app: vulnerable-app
+    spec:
+      # No security context - security issue
+      containers:
+      - name: app
+        image: nginx:latest  # Using latest tag - not recommended
+        ports:
+        - containerPort: 80
+        # Running as root - security issue
+        securityContext:
+          runAsUser: 0  # Should not run as root
+          runAsGroup: 0
+          allowPrivilegeEscalation: true  # Should be false
+          privileged: true  # Should be false
+          readOnlyRootFilesystem: false  # Should be true
+          runAsNonRoot: false  # Should be true
+        # Environment variables with secrets - security issue
+        env:
+        - name: DATABASE_PASSWORD
+          value: "password123"  # Hardcoded secret
+        - name: API_KEY
+          value: "sk-1234567890abcdef"  # Hardcoded API key
+        - name: SECRET_TOKEN
+          value: "abc123xyz789"  # Hardcoded token
+        # No resource limits - can cause resource starvation
+        # resources:
+        #   limits:
+        #     memory: "128Mi"
+        #     cpu: "100m"
+        #   requests:
+        #     memory: "64Mi"
+        #     cpu: "50m"
+        # No liveness/readiness probes
+        volumeMounts:
+        - name: host-volume
+          mountPath: /host
+      volumes:
+      - name: host-volume
+        hostPath:
+          path: /  # Mounting host root - major security issue
+          type: Directory
+      # No pod security context
+      # securityContext:
+      #   runAsNonRoot: true
+      #   runAsUser: 1000
+      #   fsGroup: 2000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vulnerable-service
+spec:
+  selector:
+    app: vulnerable-app
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: LoadBalancer  # Exposes service externally
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: privileged-pod
+spec:
+  containers:
+  - name: privileged-container
+    image: ubuntu:20.04
+    command: ["/bin/sleep", "3600"]
+    securityContext:
+      privileged: true  # Major security issue
+      allowPrivilegeEscalation: true
+      runAsUser: 0
+      capabilities:
+        add:
+        - SYS_ADMIN  # Dangerous capability
+        - NET_ADMIN
+        - SYS_TIME
+    volumeMounts:
+    - name: docker-socket
+      mountPath: /var/run/docker.sock
+    - name: host-proc
+      mountPath: /host/proc
+    - name: host-sys
+      mountPath: /host/sys
+  volumes:
+  - name: docker-socket
+    hostPath:
+      path: /var/run/docker.sock  # Docker socket access - security issue
+  - name: host-proc
+    hostPath:
+      path: /proc
+  - name: host-sys
+    hostPath:
+      path: /sys
+  hostNetwork: true  # Using host network - security issue
+  hostPID: true      # Using host PID - security issue
+  hostIPC: true      # Using host IPC - security issue
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hardcoded-secret
+type: Opaque
+data:
+  # Base64 encoded secrets (easily decodable)
+  password: cGFzc3dvcmQxMjM=  # password123
+  api-key: c2stMTIzNDU2Nzg5MGFiY2RlZg==  # sk-1234567890abcdef
+  token: YWJjMTIzeHl6Nzg5  # abc123xyz789
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  database_host: "db.example.com"
+  database_password: "password123"  # Secret in ConfigMap - security issue
+  api_endpoint: "https://api.example.com"
+  secret_key: "my-secret-key-123"  # Secret in ConfigMap
+  
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: overprivileged-role
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]  # Too permissive - allows everything
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: overprivileged-binding
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: overprivileged-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: privileged-sa
+  namespace: default
+automountServiceAccountToken: true  # Should be false if not needed

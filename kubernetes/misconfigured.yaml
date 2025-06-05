@@ -1,0 +1,177 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-all-policy
+spec:
+  podSelector: {}  # Applies to all pods
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from: []  # Allows all ingress traffic - too permissive
+  egress:
+  - to: []    # Allows all egress traffic - too permissive
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: unsafe-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Delete  # Data will be lost
+  hostPath:
+    path: /tmp/data  # Using hostPath - security issue
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: unsafe-pvc
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: privileged-job
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: job-container
+        image: alpine:latest  # Using latest tag
+        command: ["sh", "-c"]
+        args:
+        - |
+          echo "Running privileged job"
+          echo "DATABASE_PASSWORD=secret123" > /tmp/secrets.txt
+          cat /tmp/secrets.txt
+        securityContext:
+          runAsUser: 0  # Running as root
+          privileged: true
+        volumeMounts:
+        - name: host-volume
+          mountPath: /host
+      volumes:
+      - name: host-volume
+        hostPath:
+          path: /
+      # No security context at pod level
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-cronjob
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: backup
+            image: postgres:13
+            command:
+            - /bin/bash
+            - -c
+            - |
+              export PGPASSWORD=hardcoded_password
+              pg_dump -h db.example.com -U admin -d myapp > /backup/backup.sql
+            env:
+            - name: DATABASE_URL
+              value: "postgresql://admin:password123@db.example.com:5432/myapp"
+            securityContext:
+              runAsUser: 0
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+          volumes:
+          - name: backup-storage
+            hostPath:
+              path: /var/backups  # Using host path
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: database-pod
+spec:
+  containers:
+  - name: database
+    image: mysql:8.0
+    ports:
+    - containerPort: 3306
+      hostPort: 3306  # Exposing on host port - security issue
+    env:
+    - name: MYSQL_ROOT_PASSWORD
+      value: "root_password_123"  # Hardcoded root password
+    - name: MYSQL_PASSWORD
+      value: "user_password_456"  # Hardcoded user password
+    securityContext:
+      runAsUser: 0
+      allowPrivilegeEscalation: true
+    volumeMounts:
+    - name: mysql-data
+      mountPath: /var/lib/mysql
+  volumes:
+  - name: mysql-data
+    hostPath:
+      path: /var/lib/mysql-data
+  hostNetwork: true  # Using host network
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: monitoring-agent
+spec:
+  selector:
+    matchLabels:
+      app: monitoring-agent
+  template:
+    metadata:
+      labels:
+        app: monitoring-agent
+    spec:
+      containers:
+      - name: agent
+        image: monitoring-agent:latest
+        securityContext:
+          privileged: true  # DaemonSet running privileged - high risk
+          runAsUser: 0
+        volumeMounts:
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+        - name: docker-socket
+          mountPath: /var/run/docker.sock
+        env:
+        - name: API_TOKEN
+          value: "monitoring-token-123456"  # Hardcoded API token
+      volumes:
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: docker-socket
+        hostPath:
+          path: /var/run/docker.sock
+      hostNetwork: true
+      hostPID: true

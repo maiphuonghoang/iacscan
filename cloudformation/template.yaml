@@ -1,0 +1,210 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template with intentional misconfigurations for Trivy testing'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: test
+    Description: Environment name
+  
+  DatabasePassword:
+    Type: String
+    Default: password123  # Hardcoded password - security issue
+    Description: Database password
+    # NoEcho: true  # Should be enabled to hide password
+
+Resources:
+  # S3 bucket with public access - security issue
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'trivy-test-bucket-${Environment}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false       # Should be true
+        BlockPublicPolicy: false     # Should be true
+        IgnorePublicAcls: false      # Should be true
+        RestrictPublicBuckets: false # Should be true
+      # No encryption configured
+      # BucketEncryption:
+      #   ServerSideEncryptionConfiguration:
+      #     - ServerSideEncryptionByDefault:
+      #         SSEAlgorithm: AES256
+
+  # S3 bucket policy allowing public read access
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'  # Public access - security issue
+            Action:
+              - 's3:GetObject'
+            Resource: !Sub '${S3Bucket}/*'
+
+  # Security group allowing all inbound traffic
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow all traffic
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0  # Too permissive
+        - IpProtocol: udp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0  # Too permissive
+
+  # EC2 instance without encryption
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0c94855ba95b798c7
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp2
+            Encrypted: false  # Should be true
+      # No IMDSv2 enforcement
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: optional  # Should be required
+
+  # RDS instance with multiple security issues
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: trivy-test-db
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      EngineVersion: '8.0'
+      AllocatedStorage: 20
+      StorageEncrypted: false  # Should be true
+      DBName: testdb
+      MasterUsername: admin
+      MasterUserPassword: !Ref DatabasePassword  # Using parameter but still exposed
+      BackupRetentionPeriod: 0  # No backups - security issue
+      PubliclyAccessible: true  # Should be false
+      DeletionProtection: false  # Should be true for production
+      VPCSecurityGroups:
+        - !Ref SecurityGroup
+
+  # CloudWatch log group without encryption
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/trivy-test-${Environment}'
+      RetentionInDays: 7
+      # No KMS encryption key specified
+
+  # Application Load Balancer without access logging
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: trivy-test-alb
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref SecurityGroup
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      # No access logs configured
+      # LoadBalancerAttributes:
+      #   - Key: access_logs.s3.enabled
+      #     Value: true
+
+  # VPC without flow logs
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: trivy-test-vpc
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Lambda function with environment variables containing secrets
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: trivy-test-function
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Hello World'}
+      Environment:
+        Variables:
+          DATABASE_PASSWORD: password123  # Hardcoded secret
+          API_KEY: sk-1234567890abcdef     # Hardcoded API key
+          SECRET_TOKEN: abc123xyz789       # Hardcoded token
+      # No KMS encryption for environment variables
+
+  # DynamoDB table without encryption
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: trivy-test-table
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      # No encryption at rest
+      # SSESpecification:
+      #   SSEEnabled: true
+
+Outputs:
+  BucketName:
+    Description: Name of the S3 bucket
+    Value: !Ref S3Bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'
+  
+  DatabaseEndpoint:
+    Description: RDS instance endpoint
+    Value: !GetAtt RDSInstance.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseEndpoint'
+
+  # Exposing sensitive information in outputs
+  DatabasePassword:
+    Description: Database password (EXPOSED - security issue)
+    Value: !Ref DatabasePassword  # Should not expose passwords

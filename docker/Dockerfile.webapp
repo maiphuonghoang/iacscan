@@ -1,0 +1,87 @@
+# Multi-stage Dockerfile with security issues
+
+# Stage 1: Build stage with issues
+FROM node:18 as builder
+
+# No USER instruction - running as root
+WORKDIR /app
+
+# Copying package files with secrets
+COPY package*.json ./
+COPY .env ./  # Copying environment file with secrets
+
+# Installing all dependencies including dev dependencies in final image
+RUN npm install
+
+# Copying all source code (including sensitive files)
+COPY . .
+
+# Building application
+RUN npm run build
+
+# Stage 2: Production stage with more issues
+FROM nginx:alpine
+
+# Still running as root user
+# USER root
+
+# Copying from build stage without being selective
+COPY --from=builder /app /usr/share/nginx/html
+
+# Creating configuration with insecure settings
+RUN echo 'server {' > /etc/nginx/conf.d/default.conf && \
+    echo '    listen 80;' >> /etc/nginx/conf.d/default.conf && \
+    echo '    server_name _;' >> /etc/nginx/conf.d/default.conf && \
+    echo '    root /usr/share/nginx/html;' >> /etc/nginx/conf.d/default.conf && \
+    echo '    index index.html;' >> /etc/nginx/conf.d/default.conf && \
+    echo '    location / {' >> /etc/nginx/conf.d/default.conf && \
+    echo '        try_files $uri $uri/ =404;' >> /etc/nginx/conf.d/default.conf && \
+    echo '        add_header X-Frame-Options "";' >> /etc/nginx/conf.d/default.conf && \
+    echo '        add_header X-Content-Type-Options "";' >> /etc/nginx/conf.d/default.conf && \
+    echo '    }' >> /etc/nginx/conf.d/default.conf && \
+    echo '}' >> /etc/nginx/conf.d/default.conf
+
+# Adding secrets to environment
+ENV DATABASE_URL=postgresql://user:password@db.example.com:5432/myapp
+ENV JWT_SECRET=super-secret-jwt-key-123
+ENV ENCRYPTION_KEY=aes-256-key-secret
+
+# Installing unnecessary packages
+RUN apk add --no-cache \
+    curl \
+    wget \
+    vim \
+    openssh \
+    sudo \
+    bash \
+    && rm -rf /var/cache/apk/*
+
+# Setting up SSH with weak configuration
+RUN ssh-keygen -A && \
+    echo "root:password" | chpasswd && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+# Creating files with sensitive content
+RUN echo "admin_password=secret123" > /usr/share/nginx/html/config.js
+RUN echo "api_token=tok_1234567890abcdef" >> /usr/share/nginx/html/config.js
+
+# Broad file permissions
+RUN chmod -R 777 /usr/share/nginx/html
+RUN chmod 666 /etc/passwd
+
+# Exposing SSH port
+EXPOSE 22
+EXPOSE 80
+
+# Adding vulnerable startup script
+RUN echo '#!/bin/bash' > /start.sh && \
+    echo 'export SECRET_KEY=my-secret-key' >> /start.sh && \
+    echo '/usr/sbin/sshd -D &' >> /start.sh && \
+    echo 'nginx -g "daemon off;"' >> /start.sh && \
+    chmod +x /start.sh
+
+# No HEALTHCHECK defined (missing best practice)
+
+# Running multiple services and as root
+CMD ["/start.sh"]

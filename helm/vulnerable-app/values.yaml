@@ -1,0 +1,172 @@
+# Default values for vulnerable-app with intentional misconfigurations
+
+replicaCount: 3
+
+image:
+  repository: nginx
+  pullPolicy: Always  # Should be IfNotPresent for better performance
+  tag: "latest"  # Should use specific version tags
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+  automountServiceAccountToken: true  # Should be false if not needed
+
+podAnnotations: {}
+
+podSecurityContext:
+  # Should set securityContext but it's empty
+  {}
+
+securityContext:
+  # Running as root - security issue
+  runAsUser: 0
+  runAsGroup: 0
+  runAsNonRoot: false  # Should be true
+  allowPrivilegeEscalation: true  # Should be false
+  privileged: true  # Should be false
+  readOnlyRootFilesystem: false  # Should be true
+  capabilities:
+    add:
+      - SYS_ADMIN  # Dangerous capability
+      - NET_ADMIN
+    drop: []  # Should drop ALL capabilities
+
+service:
+  type: LoadBalancer  # Exposes service externally
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  # No resource limits defined - can cause resource starvation
+  {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Environment variables with hardcoded secrets
+env:
+  DATABASE_PASSWORD: "password123"
+  API_KEY: "sk-1234567890abcdef"
+  SECRET_TOKEN: "abc123xyz789"
+  ADMIN_PASSWORD: "admin123"
+  JWT_SECRET: "super-secret-jwt-key"
+
+# Configuration with sensitive data
+config:
+  database:
+    host: "db.example.com"
+    port: 5432
+    username: "admin"
+    password: "password123"  # Hardcoded password
+    ssl: false  # Should be true
+  
+  api:
+    endpoint: "https://api.example.com"
+    token: "api-token-123456"  # Hardcoded API token
+    timeout: 30
+
+  redis:
+    host: "redis.example.com"
+    port: 6379
+    password: "redis-secret"  # Hardcoded password
+    ssl: false
+
+# Volume mounts with security issues
+volumes:
+  - name: host-volume
+    hostPath:
+      path: /  # Mounting host root - major security issue
+      type: Directory
+  - name: docker-socket
+    hostPath:
+      path: /var/run/docker.sock  # Docker socket access
+
+volumeMounts:
+  - name: host-volume
+    mountPath: /host
+  - name: docker-socket
+    mountPath: /var/run/docker.sock
+
+# Network policy settings (too permissive)
+networkPolicy:
+  enabled: false  # Should be enabled
+  allowAll: true  # Too permissive
+
+# RBAC settings (overprivileged)
+rbac:
+  create: true
+  rules:
+    - apiGroups: ["*"]
+      resources: ["*"]
+      verbs: ["*"]  # Too permissive - allows everything
+
+# Monitoring and health checks
+healthCheck:
+  enabled: false  # Should be enabled
+  
+livenessProbe:
+  enabled: false  # Should be enabled
+
+readinessProbe:
+  enabled: false  # Should be enabled
+
+# Backup configuration
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retention: 1  # Very short retention
+  destination: "s3://backup-bucket"
+  credentials:
+    accessKey: "AKIA1234567890ABCDEF"  # Hardcoded AWS credentials
+    secretKey: "abcdef1234567890abcdef1234567890abcdef12"
+
+# Logging configuration
+logging:
+  level: DEBUG  # Too verbose for production
+  format: json
+  destination: stdout
+  
+# Additional secrets
+secrets:
+  oauth:
+    clientId: "oauth-client-123"
+    clientSecret: "oauth-secret-456"  # Hardcoded secret
+  
+  database:
+    rootPassword: "root-password-123"  # Hardcoded root password
+    userPassword: "user-password-456"
+    
+  ssl:
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIDXTCCAkWgAwIBAgIJAKoK/heBjcOuMA0GCSqGSIb3DQEBBQUAMEUxCzAJBgNV
+      -----END CERTIFICATE-----
+    privateKey: |
+      -----BEGIN PRIVATE KEY-----
+      MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDdwJmuFqW7RMQ
+      -----END PRIVATE KEY-----

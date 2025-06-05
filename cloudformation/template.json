@@ -1,0 +1,144 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "CloudFormation JSON template with misconfigurations for Trivy testing",
+  
+  "Parameters": {
+    "KeyPairName": {
+      "Type": "String",
+      "Default": "my-keypair",
+      "Description": "EC2 Key Pair name"
+    }
+  },
+  
+  "Resources": {
+    "S3BucketWithLogging": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": "trivy-test-logging-bucket",
+        "AccessControl": "PublicRead",
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": false,
+          "BlockPublicPolicy": false,
+          "IgnorePublicAcls": false,
+          "RestrictPublicBuckets": false
+        }
+      }
+    },
+    
+    "WebServerInstance": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "ImageId": "ami-0c94855ba95b798c7",
+        "InstanceType": "t2.micro",
+        "KeyName": {"Ref": "KeyPairName"},
+        "SecurityGroupIds": [{"Ref": "WebServerSecurityGroup"}],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": ["", [
+              "#!/bin/bash\n",
+              "export DATABASE_PASSWORD=hardcoded_password123\n",
+              "export API_SECRET=sk-abcdef1234567890\n",
+              "yum update -y\n",
+              "yum install -y httpd\n",
+              "systemctl start httpd\n"
+            ]]
+          }
+        },
+        "BlockDeviceMappings": [{
+          "DeviceName": "/dev/xvda",
+          "Ebs": {
+            "VolumeSize": 20,
+            "VolumeType": "gp2",
+            "Encrypted": false
+          }
+        }]
+      }
+    },
+    
+    "WebServerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for web server",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 3389,
+            "ToPort": 3389,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+
+    "DatabaseInstance": {
+      "Type": "AWS::RDS::DBInstance",
+      "Properties": {
+        "DBInstanceIdentifier": "trivy-test-database",
+        "DBInstanceClass": "db.t3.micro",
+        "Engine": "postgres",
+        "EngineVersion": "13.7",
+        "AllocatedStorage": 20,
+        "StorageEncrypted": false,
+        "DBName": "testdatabase",
+        "MasterUsername": "admin",
+        "MasterUserPassword": "password123",
+        "BackupRetentionPeriod": 0,
+        "PubliclyAccessible": true,
+        "VPCSecurityGroups": [{"Ref": "DatabaseSecurityGroup"}]
+      }
+    },
+
+    "DatabaseSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security group for database",
+        "SecurityGroupIngress": [{
+          "IpProtocol": "tcp",
+          "FromPort": 5432,
+          "ToPort": 5432,
+          "CidrIp": "0.0.0.0/0"
+        }]
+      }
+    },
+
+    "CloudTrail": {
+      "Type": "AWS::CloudTrail::Trail",
+      "Properties": {
+        "TrailName": "trivy-test-trail",
+        "S3BucketName": {"Ref": "S3BucketWithLogging"},
+        "IncludeGlobalServiceEvents": true,
+        "IsMultiRegionTrail": false,
+        "EnableLogFileValidation": false
+      }
+    }
+  },
+  
+  "Outputs": {
+    "InstanceId": {
+      "Description": "Instance ID of the web server",
+      "Value": {"Ref": "WebServerInstance"}
+    },
+    "DatabaseEndpoint": {
+      "Description": "Database endpoint",
+      "Value": {"Fn::GetAtt": ["DatabaseInstance", "Endpoint.Address"]}
+    }
+  }
+}

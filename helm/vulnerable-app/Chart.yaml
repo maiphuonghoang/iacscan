@@ -1,0 +1,22 @@
+apiVersion: v2
+name: vulnerable-app
+description: A Helm chart with intentional security misconfigurations for Trivy testing
+type: application
+version: 0.1.0
+appVersion: "1.16.0"
+
+maintainers:
+  - name: Security Team
+    email: security@example.com
+
+keywords:
+  - web
+  - application
+  - vulnerable
+
+home: https://example.com
+sources:
+  - https://github.com/example/vulnerable-app
+
+annotations:
+  category: Application

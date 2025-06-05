@@ -1,0 +1,251 @@
+---
+# Ansible playbook with intentional security misconfigurations for Trivy testing
+
+- name: Setup web server with security issues
+  hosts: webservers
+  become: yes
+  become_user: root
+  gather_facts: yes
+  
+  vars:
+    # Hardcoded sensitive variables - security issue
+    database_password: "password123"
+    api_key: "sk-1234567890abcdef"
+    secret_token: "abc123xyz789"
+    admin_password: "admin123"
+    ssh_private_key: |
+      -----BEGIN OPENSSH PRIVATE KEY-----
+      b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAFwAAAAdzc2gtcn
+      -----END OPENSSH PRIVATE KEY-----
+    
+  tasks:
+    - name: Install packages without updating cache
+      package:
+        name:
+          - nginx
+          - openssh-server
+          - telnet  # Insecure protocol
+          - ftp     # Insecure protocol
+          - rsh-server  # Very insecure
+        state: present
+      # No update_cache: yes - security issue
+
+    - name: Create user with weak password
+      user:
+        name: webapp
+        password: "{{ 'password' | password_hash('sha512') }}"  # Weak password
+        groups: sudo
+        shell: /bin/bash
+        home: /home/webapp
+      
+    - name: Set unsafe file permissions
+      file:
+        path: "{{ item }}"
+        mode: '0777'  # Too permissive
+        owner: root
+        group: root
+      loop:
+        - /tmp
+        - /var/tmp
+        - /home/webapp
+
+    - name: Create configuration files with secrets
+      copy:
+        content: |
+          DATABASE_URL=postgresql://admin:{{ database_password }}@db.example.com:5432/myapp
+          API_KEY={{ api_key }}
+          SECRET_TOKEN={{ secret_token }}
+          ADMIN_PASSWORD={{ admin_password }}
+        dest: /etc/webapp/config.env
+        mode: '0644'  # Readable by all users - security issue
+        owner: root
+        group: root
+
+    - name: Configure SSH with weak settings
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+      loop:
+        - { regexp: '^PermitRootLogin', line: 'PermitRootLogin yes' }  # Allows root login
+        - { regexp: '^PasswordAuthentication', line: 'PasswordAuthentication yes' }
+        - { regexp: '^PermitEmptyPasswords', line: 'PermitEmptyPasswords yes' }  # Very dangerous
+        - { regexp: '^Protocol', line: 'Protocol 1' }  # Insecure protocol version
+      notify: restart ssh
+
+    - name: Disable firewall
+      systemd:
+        name: ufw
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+
+    - name: Install packages from untrusted sources
+      shell: |
+        curl -sSL https://get.docker.com/ | sh
+        wget -O - https://some-untrusted-site.com/install.sh | bash
+      args:
+        warn: false  # Ignoring security warnings
+
+    - name: Create cron job with hardcoded credentials
+      cron:
+        name: "Database backup"
+        minute: "0"
+        hour: "2"
+        job: "PGPASSWORD={{ database_password }} pg_dump -h db.example.com -U admin myapp > /backup/backup.sql"
+        user: root
+
+    - name: Set weak MySQL root password
+      mysql_user:
+        name: root
+        password: "root123"  # Weak password
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+      ignore_errors: yes
+
+    - name: Create MySQL users with weak passwords
+      mysql_user:
+        name: "{{ item.name }}"
+        password: "{{ item.password }}"
+        priv: "*.*:ALL"  # Too many privileges
+        host: "%"  # Access from anywhere
+      loop:
+        - { name: "admin", password: "admin" }
+        - { name: "user", password: "password" }
+        - { name: "guest", password: "" }  # Empty password
+      ignore_errors: yes
+
+    - name: Download and execute scripts without verification
+      get_url:
+        url: "{{ item }}"
+        dest: "/tmp/{{ item | basename }}"
+        mode: '0755'
+        validate_certs: no  # Skipping SSL verification
+      loop:
+        - "http://example.com/script1.sh"
+        - "https://untrusted-site.com/install.sh"
+      
+    - name: Execute downloaded scripts
+      command: "/tmp/{{ item | basename }}"
+      loop:
+        - "http://example.com/script1.sh"
+        - "https://untrusted-site.com/install.sh"
+      ignore_errors: yes
+
+    - name: Configure nginx with insecure settings
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name _;
+              root /var/www/html;
+              index index.html index.php;
+              
+              # Disable security headers
+              add_header X-Frame-Options "";
+              add_header X-Content-Type-Options "";
+              add_header X-XSS-Protection "";
+              
+              # Allow directory listing
+              autoindex on;
+              
+              # Expose server information
+              server_tokens on;
+              
+              location / {
+                  try_files $uri $uri/ =404;
+              }
+              
+              # Dangerous PHP configuration
+              location ~ \.php$ {
+                  include snippets/fastcgi-php.conf;
+                  fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
+                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                  include fastcgi_params;
+              }
+          }
+        dest: /etc/nginx/sites-available/default
+        backup: yes
+      notify: reload nginx
+
+    - name: Create world-readable backup script
+      copy:
+        content: |
+          #!/bin/bash
+          export DATABASE_PASSWORD="{{ database_password }}"
+          export API_TOKEN="{{ api_key }}"
+          mysqldump -u root -proot123 --all-databases > /backup/full_backup.sql
+          tar -czf /backup/app_backup.tar.gz /var/www/html
+          echo "Backup completed at $(date)" >> /var/log/backup.log
+        dest: /usr/local/bin/backup.sh
+        mode: '0755'  # Executable by all
+        owner: root
+        group: root
+
+    - name: Create log files with sensitive information
+      shell: |
+        echo "User admin logged in with password: {{ admin_password }}" >> /var/log/app.log
+        echo "Database connection: postgresql://admin:{{ database_password }}@db.example.com" >> /var/log/app.log
+        echo "API Key: {{ api_key }}" >> /var/log/debug.log
+      args:
+        warn: false
+
+    - name: Set insecure sudo configuration
+      lineinfile:
+        path: /etc/sudoers
+        line: "{{ item }}"
+        validate: 'visudo -cf %s'
+      loop:
+        - "webapp ALL=(ALL) NOPASSWD:ALL"  # No password required
+        - "%sudo ALL=(ALL:ALL) NOPASSWD:ALL"
+
+  handlers:
+    - name: restart ssh
+      systemd:
+        name: ssh
+        state: restarted
+
+    - name: reload nginx
+      systemd:
+        name: nginx
+        state: reloaded
+
+---
+- name: Configure database server with vulnerabilities
+  hosts: database
+  become: yes
+  
+  vars:
+    mysql_root_password: "root123"  # Hardcoded weak password
+    
+  tasks:
+    - name: Install MySQL without secure installation
+      package:
+        name: mysql-server
+        state: present
+
+    - name: Start MySQL service
+      systemd:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: Configure MySQL to accept connections from anywhere
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = 0.0.0.0'  # Accepts connections from anywhere
+      notify: restart mysql
+
+    - name: Disable MySQL binary logging
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '^log-bin'
+        line: '# log-bin = /var/log/mysql/mysql-bin.log'
+      notify: restart mysql
+
+  handlers:
+    - name: restart mysql
+      systemd:
+        name: mysql
+        state: restarted
