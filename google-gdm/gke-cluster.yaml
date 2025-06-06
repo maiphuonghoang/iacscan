@@ -1,0 +1,20 @@
+resources:
+- name: bad-cluster
+  type: container.v1.cluster
+  properties:
+    zone: us-central1-a
+    cluster:
+      name: bad-cluster
+      initialNodeCount: 1
+      loggingService: none                      # ❌ Không bật logging
+      monitoringService: none                   # ❌ Không bật monitoring
+      legacyAbac:
+        enabled: true                           # ❌ Dùng ABAC
+      ipAllocationPolicy:
+        useIpAliases: false                     # ❌ Không dùng VPC-native
+      nodeConfig:
+        machineType: f1-micro                   # ❌ Máy yếu không nên dùng cho production
+        oauthScopes:
+          - https://www.googleapis.com/auth/cloud-platform  # ❌ Quyền quá rộng
+        metadata:
+          disable-legacy-endpoints: "false"     # ❌ Cho phép metadata endpoint cũ

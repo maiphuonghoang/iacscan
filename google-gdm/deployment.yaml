@@ -1,0 +1,6 @@
+imports:
+- path: gke-bad-cluster.yaml
+
+resources:
+- name: my-bad-gke-deployment
+  type: gke-bad-cluster.yaml
