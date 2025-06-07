@@ -94,38 +94,3 @@ resource "openstack_lbaas_listener_v2" "insecure_http_listener" {
   loadbalancer_id = openstack_lbaas_loadbalancer_v2.lb.id
 }
 
-# ----------------------------------------
-
-# Tệp này được tạo cho AWS để đảm bảo KICS phát hiện lỗi CRITICAL và HIGH.
-# CHỈ DÙNG CHO MỤC ĐÍCH THỬ NGHIỆM.
-
-# LỖ HỔNG CRITICAL: S3 Bucket cho phép bất kỳ ai cũng có thể đọc và GHI.
-# Đây là lỗi cấu hình sai kinh điển và nguy hiểm nhất trên AWS.
-# Nó cho phép bất kỳ ai trên Internet xóa, thay đổi, và tải lên dữ liệu của bạn.
-resource "aws_s3_bucket" "data_storage" {
-  bucket = "my-super-critical-data-bucket-12345"
-}
-
-resource "aws_s3_bucket_acl" "data_storage_acl" {
-  bucket = aws_s3_bucket.data_storage.id
-  
-  # LỖ HỔNG CRITICAL NẰM Ở ĐÂY:
-  acl    = "public-read-write" 
-}
-
-
-# LỖ HỔNG HIGH: Security Group cho phép truy cập SSH từ bất kỳ đâu.
-# Mở cổng quản trị ra toàn bộ Internet là một rủi ro bảo mật cao,
-# khiến máy chủ trở thành mục tiêu cho các cuộc tấn công brute-force.
-resource "aws_security_group" "allow_all_ssh" {
-  name        = "allow-all-ssh"
-  description = "Allow SSH inbound traffic from anywhere"
-
-  # LỖ HỔNG HIGH NẰM Ở ĐÂY:
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
